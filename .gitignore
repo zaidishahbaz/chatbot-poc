@@ -1,0 +1,66 @@
+# Python
+*.egg-info
+*.pyc
+.python-version
+__pycache__/
+
+# Notebooks
+*.ipynb
+*.ipynb_checkpoints
+
+# EngOps
+.startup_time.csv
+# VS Code REST Client extension files
+*.http
+
+# Celery
+celerybeat.pid
+celerybeat-schedule*
+
+# Django
+staticfiles
+
+# Environment
+.env*
+.envs/
+.venv
+venv
+
+# IDEs
+*.swp
+.idea
+.vscode
+
+# Testing and lints
+.coverage*
+.hypothesis
+.mypy_cache/
+.pytest_cache
+.test_durations
+.testmondata
+coverage.xml
+htmlcov
+
+# DB dumps
+*.dump
+*.sqlite3
+dbdump_dir/
+
+# docs
+docs/_build/
+# wrangler generated code
+docs/workers-site/
+docs/wrangler.toml
+
+# Profiling
+/silk_profiles
+
+# Misc
+*.DS_Store
+*.log
+_trial_temp/
+ml_artifact/
+
+# Xero private key for local development
+.xero.pem
+.env
