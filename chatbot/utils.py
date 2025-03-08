@@ -1,8 +1,11 @@
+from base64 import b64encode
+
+import requests
 from django.conf import settings
 from twilio.rest import Client
 
 
-def send_whatsapp_message(to, message):
+def send_whatsapp_message(to, message=None, file_path=None):
     """
     Sends a WhatsApp message using Twilio API.
 
@@ -11,8 +14,29 @@ def send_whatsapp_message(to, message):
     """
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
-    message = client.messages.create(
-        from_=settings.TWILIO_WHATSAPP_NUMBER, body=message, to=to
-    )
+    # _ = ChatMessage.objects.create(
+    #     sender=sender, message=message, response=response_text
+    # )
+
+    if message:
+        message = client.messages.create(
+            from_=settings.TWILIO_WHATSAPP_NUMBER,
+            body=message,
+            to=to,
+        )
+    elif file_path:
+        message = client.messages.create(
+            from_=settings.TWILIO_WHATSAPP_NUMBER,
+            media_url=f"https://anteater-divine-ultimately.ngrok-free.app/{file_path}",
+            to=to,
+        )
 
     return message.sid
+
+
+def parse_media_uri(twilio_url: str):
+    auth_str = f"{settings.TWILIO_ACCOUNT_SID}:{settings.TWILIO_AUTH_TOKEN}"
+    auth_bytes = auth_str.encode("utf-8")
+    auth_b64 = b64encode(auth_bytes).decode("utf-8")
+    headers = {"Authorization": "Basic " + auth_b64}
+    return requests.get(twilio_url, headers=headers).url
