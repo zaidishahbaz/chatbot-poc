@@ -4,11 +4,13 @@ from rest_framework import status  # type: ignore
 from rest_framework.response import Response  # type: ignore
 from rest_framework.views import APIView  # type: ignore
 from transformers import pipeline  # type: ignore
-from twilio.twiml.messaging_response import MessagingResponse  # type: ignore
+from twilio.twiml.messaging_response import MessagingResponse
+
+from ai.util import ConversationUtil  # type: ignore
 
 from .models import ChatMessage
 from .serializers import ChatMessageSerializer
-from .utils import send_whatsapp_message
+from .utils import parse_media_uri, send_whatsapp_message
 
 
 def generate_hindi_response(message):
@@ -30,21 +32,27 @@ def generate_hindi_response(message):
 @method_decorator(csrf_exempt, name="dispatch")
 class WhatsAppWebhook(APIView):
     def post(self, request, *args, **kwargs):
+
         sender = request.data.get("From")
         message = request.data.get("Body")
+        message_type = request.data.get("MessageType")
 
-        # Generate AI response in Hindi
-        response_text = generate_hindi_response(message)
+        response_text = message
 
-        # Save the chat in the database
-        _ = ChatMessage.objects.create(
-            sender=sender, message=message, response=response_text
-        )
+        util = ConversationUtil()
+        if message_type == "text":
+            response_text = util.text_to_text(
+                message, source_lang="en", destination_lang="fr"
+            )
+            send_whatsapp_message(sender, response_text)
 
-        # Send the AI response back to the user
-        send_whatsapp_message(sender, response_text)
+        if message_type == "audio":
+            media_url = parse_media_uri(request.data.get("MediaUrl0"))
+            output = util.speech_to_speech(
+                media_url, source_lang="en", destination_lang="hi"
+            )
+            send_whatsapp_message(sender, file_path=output)
 
-        # Twilio-compatible response
         twilio_response = MessagingResponse()
         twilio_response.message(response_text)
         return Response(

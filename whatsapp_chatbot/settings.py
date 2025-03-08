@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -148,3 +149,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")  # Twilio sandbox number
+OPEN_AI_KEY = os.getenv("OPEN_AI_KEY")
+
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, "static"),
+]
+STATTC_URL = "/static/"
+GOOGLE_SERVICE_JSON = json.loads(os.getenv("GOOGLE_SERVICE_JSON", "{}"))
