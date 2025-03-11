@@ -64,3 +64,4 @@ ml_artifact/
 # Xero private key for local development
 .xero.pem
 .env
+*.mp3

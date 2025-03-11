@@ -156,3 +156,5 @@ STATICFILES_DIRS = [
 ]
 STATTC_URL = "/static/"
 GOOGLE_SERVICE_JSON = json.loads(os.getenv("GOOGLE_SERVICE_JSON", "{}"))
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+NGROK_URL = os.getenv("NGROK_URL")
