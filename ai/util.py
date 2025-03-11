@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import urllib.parse
@@ -9,11 +10,15 @@ import requests
 from django.conf import settings
 from google.cloud.translate_v2 import Client
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageToolCall
+
+from ai.constants import AI_PROMPT, TOOLS
+from ai.models import Languages, OpenAiConvSession, SessionRole, UserPreference
 
 logger = logging.getLogger(__name__)
 
 
-class ConversationUtil:
+class TranslationTranscriptionUtil:
     open_ai_client: OpenAI
     translation_client: Client
 
@@ -25,9 +30,6 @@ class ConversationUtil:
         self.translation_client = Client.from_service_account_info(
             settings.GOOGLE_SERVICE_JSON
         )
-        self.google_maps_api_key = settings.GOOGLE_MAPS_API_KEY
-        self.fuel_origin = None
-        self.fuel_destination = None
 
     def _transcribe(self, audio: io.BytesIO) -> str:
         transcription = self.open_ai_client.audio.translations.create(
@@ -72,54 +74,167 @@ class ConversationUtil:
     def text_to_text(self, input_text: str, source_lang: str, destination_lang: str):
         return self._translate(input_text, source_lang, destination_lang)
 
-    def ai_response(self, message: str) -> str:
-        """Generates a trucking response and suggests refueling stations if applicable."""
 
-        prompt = f"""
-        You are a trucking company dispatcher. If the user asks for a route, extract the origin and destination
-        and generate a Google Maps link. Also, suggest gas stations along the way if possible.
-        consider you are a 10 tyre truck, and source and destination are {self.fuel_origin} and {self.fuel_destination}
+class ConversationUtil:
+    open_ai_client: OpenAI
+    message_history = []
 
-        Question: {message}
+    def __init_session(self, user: str):
+        self.messages = [{"role": SessionRole.DEVELOPER.value, "content": AI_PROMPT}]
+        session_details = OpenAiConvSession.objects.filter(user=self.user).order_by(
+            "created_date"
+        )
+        for session in session_details.iterator():
+            self.messages.append({"role": session.role, "content": session.message})
 
-        Answer:
+    def __init__(self, user: str):
+        self.open_ai_client = OpenAI(api_key=settings.OPEN_AI_KEY)
+        self.google_maps_api_key = settings.GOOGLE_MAPS_API_KEY
+        self.fuel_origin = None
+        self.fuel_destination = None
+        self.user = user
+        self.__init_session(user)
+        self.translation_util = TranslationTranscriptionUtil()
+
+    def _process_tool_call(self, tool_call: ChatCompletionMessageToolCall):
+        """
+        Call corresponding handler function for tool calls
         """
 
-        response = self.open_ai_client.chat.completions.create(
-            model="gpt-4-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a trucking dispatcher providing guidance to drivers.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=200,
-            temperature=0.7,
-        )
+        function_name = tool_call.function.name
+        handler = getattr(self, f"handle_{function_name}")
 
-        ai_response = response.choices[0].message.content.strip()
-
-        # Extract locations from user input
-        origin, destination = self.extract_locations(message)
-
-        if origin and destination:
-            self.fuel_origin = origin
-            self.fuel_destination = destination
-            # Generate Google Maps Route Link
-            maps_link = self.generate_google_maps_link(origin, destination)
-            ai_response += (
-                f"\n\n🔗 Click here to view the route on Google Maps: {maps_link}"
+        if not handler:
+            logger.error(
+                "Tool call not defined, returning generic message",
+                extra={"tool_call": tool_call, "client": self.gpt_client.pk},
             )
 
-            # Fetch gas stations along the route
-            gas_stations = self.get_gas_stations_on_route(origin, destination)
-            if gas_stations:
-                ai_response += "\n\n⛽ Suggested Gas Stations Along the Route:\n"
-                for station in gas_stations:
-                    ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
+        return handler(**json.loads(tool_call.function.arguments))
 
+    def _update_session_history(
+        self,
+        content: str | None,
+        role: SessionRole,
+    ):
+        """
+        Update session history
+        """
+        if not content:
+            return
+
+        OpenAiConvSession.objects.create(
+            user=self.user, message=content, role=role.value
+        )
+
+        self.messages.append({"role": role.value, "content": content})
+
+    def _get_gpt_response(self):
+        """
+        Get ai response based on the chat history
+        """
+
+        return self.open_ai_client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=self.messages,
+            max_tokens=200,
+            tools=TOOLS,
+        )
+
+    def handle_update_user_preference(self, language: str):
+        """
+        Tool handler function to change language
+        """
+        selected_language = Languages(language)
+        UserPreference.objects.update_or_create(
+            user=self.user,
+            defaults={"language": selected_language.value},
+        )
+        self._update_session_history(
+            content="Updated user preference",
+            role=SessionRole.DEVELOPER,
+        )
+        return f"✅ Your preferred language has been set to {selected_language.name}."
+
+    def handle_get_route(self, origin: str, destination: str):
+        """
+        Tool handler function to get route
+        """
+
+        self.fuel_origin = origin
+        self.fuel_destination = destination
+        # Generate Google Maps Route Link
+        maps_link = self.generate_google_maps_link(origin, destination)
+        ai_response = f"\n\n🔗 Click here to view the route on Google Maps: {maps_link}"
+
+        # Fetch gas stations along the route
+        gas_stations = self.get_gas_stations_on_route(origin, destination)
+        if gas_stations:
+            ai_response += "\n\n⛽ Suggested Gas Stations Along the Route:\n"
+            for station in gas_stations:
+                ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
+
+        self._update_session_history(
+            content="Route has been calculated and send to user.",
+            role=SessionRole.DEVELOPER,
+        )
         return ai_response
+
+    def ai_response(self, message: str = None, media_url: str = None):
+        """Generates a trucking response and suggests refueling stations if applicable."""
+
+        # Transcribe audio message
+        if media_url:
+            with urlopen(media_url) as response:
+                audio = io.BytesIO(response.read())
+                audio.name = "input.mp3"
+
+            message = self.translation_util._transcribe(audio)
+
+        # Handle language selection
+        if "change_lang" in message:
+            parts = message.split(" ")
+            message = self.handle_update_user_preference(parts[1])
+        else:
+            self._update_session_history(
+                content=message,
+                role=SessionRole.USER,
+            )
+
+            def translate(message):
+                """
+                Translate to language configure by the user
+                """
+                try:
+                    language_preference_config = UserPreference.objects.get(
+                        user=self.user
+                    )
+                    language = language_preference_config.language
+                except UserPreference.DoesNotExist:
+                    language = "en"
+
+                if language != "en":
+                    message = self.translation_util.text_to_text(
+                        message, source_lang="en", destination_lang=language
+                    )
+                return message
+
+            # Generate ai response
+            response = self._get_gpt_response()
+            if response.choices[0].message.tool_calls:
+                tool_call = response.choices[0].message.tool_calls[0]
+                message = self._process_tool_call(tool_call)
+                # Skip voice generation for tool output
+                return translate(message), "text"
+            else:
+                message = response.choices[0].message.content
+
+            message = translate(message)
+
+            if media_url:
+                return self.translation_util._generate_audio(message), "audio"
+
+            return message, "text"
 
     def extract_locations(self, message: str):
         """Extracts origin and destination from the user's message using a basic pattern."""
