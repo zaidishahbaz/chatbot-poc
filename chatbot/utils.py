@@ -13,10 +13,7 @@ def send_whatsapp_message(to, message=None, file_path=None):
     :param message: Message text
     """
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-
-    # _ = ChatMessage.objects.create(
-    #     sender=sender, message=message, response=response_text
-    # )
+    ngrok_url = settings.NGROK_URL
 
     if message:
         message = client.messages.create(
@@ -24,10 +21,15 @@ def send_whatsapp_message(to, message=None, file_path=None):
             body=message,
             to=to,
         )
+        # TODO: Save chats in DB
+        # _ = ChatMessage.objects.create(
+        #     sender=sender, message=message, response=response_text
+        # )
+
     elif file_path:
         message = client.messages.create(
             from_=settings.TWILIO_WHATSAPP_NUMBER,
-            media_url=f"https://anteater-divine-ultimately.ngrok-free.app/{file_path}",
+            media_url=f"{ngrok_url}/{file_path}",
             to=to,
         )
 
