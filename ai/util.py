@@ -154,7 +154,7 @@ class ConversationUtil:
             content="Updated user preference",
             role=SessionRole.DEVELOPER,
         )
-        return f"✅ Your preferred language has been set to {selected_language.name}."
+        return self._get_gpt_response().choices[0].message.content
 
     def handle_get_route(self, origin: str, destination: str):
         """
@@ -175,10 +175,40 @@ class ConversationUtil:
                 ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
 
         self._update_session_history(
-            content="Route has been calculated and send to user.",
+            content=f"Route has been calculated, link: {maps_link}",
             role=SessionRole.DEVELOPER,
         )
-        return ai_response
+        return self._get_gpt_response().choices[0].message.content
+
+    def handle_get_gas_stations(self, origin: str, destination: str):
+        ai_response = ""
+
+        gas_stations = self.get_gas_stations_on_route(origin, destination)
+        if gas_stations:
+            ai_response += "\n\n⛽ Suggested Gas Stations Along the Route:\n"
+            for station in gas_stations:
+                ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
+
+        self._update_session_history(
+            content=f"Gas station found: {gas_stations}",
+            role=SessionRole.DEVELOPER,
+        )
+        return self._get_gpt_response().choices[0].message.content
+
+    def handle_get_repair_stations(self, origin: str, destination: str):
+        ai_response = ""
+
+        gas_stations = self.get_repair_shops_on_route(origin, destination)
+        if gas_stations:
+            ai_response += "\n\n⛽ Suggested repair shops Along the Route:\n"
+            for station in gas_stations:
+                ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
+
+        self._update_session_history(
+            content=f"Repair shops found: {gas_stations}",
+            role=SessionRole.DEVELOPER,
+        )
+        return self._get_gpt_response().choices[0].message.content
 
     def ai_response(self, message: str = None, media_url: str = None):
         """Generates a trucking response and suggests refueling stations if applicable."""
@@ -267,6 +297,36 @@ class ConversationUtil:
             "location": midpoint,  # Searching near the destination (can be adjusted for midpoint)
             "radius": 5000,  # 5 km radius
             "type": "gas_station",
+            "key": self.google_maps_api_key,
+        }
+
+        response = requests.get(places_url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            gas_stations = []
+
+            for place in data.get("results", [])[:3]:  # Limit to 3 stations
+                name = place["name"]
+                place_id = place["place_id"]
+                maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+                gas_stations.append({"name": name, "maps_url": maps_url})
+
+            return gas_stations
+        return []
+
+    def get_repair_shops_on_route(self, origin: str, destination: str):
+        """Fetches gas stations along the route using the Google Places API."""
+        places_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+
+        # Get midpoint between origin and destination (rough estimate)
+        midpoint = (
+            destination  # Simplified, ideally get a midpoint via Google Directions API
+        )
+
+        params = {
+            "location": midpoint,  # Searching near the destination (can be adjusted for midpoint)
+            "radius": 5000,  # 5 km radius
+            "type": "car_repair",
             "key": self.google_maps_api_key,
         }
 
