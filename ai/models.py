@@ -17,6 +17,8 @@ class Languages(models.TextChoices):
     NEPALI = "ne"
     GERMAN = "ge"
     JAPANESE = "ja"
+    BULGARIAN = "bg"
+    HUNGARIAN = "hu"
 
 
 class UserPreference(models.Model):

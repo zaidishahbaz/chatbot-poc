@@ -262,7 +262,7 @@ class ConversationUtil:
 
     def append_service_option_message(self, message: str):
         message += "\n\n"
-        message += "For quick help, select any of the option"
+        message += self.translate("For quick help, select any of the option")
         message += "\n"
         for key, value in self.SERVICE_OPTION_MAP.items():
             message += f"{key}. {self.translate(value)}"
