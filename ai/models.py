@@ -6,6 +6,7 @@ class SessionRole(models.TextChoices):
     USER = "user"
     ASSISTANT = "assistant"
     DEVELOPER = "developer"
+    SYSTEM = "system"
 
 
 class Languages(models.TextChoices):
@@ -13,6 +14,9 @@ class Languages(models.TextChoices):
     SPANISH = "es"
     HINDI = "hi"
     FRENCH = "fr"
+    NEPALI = "ne"
+    GERMAN = "ge"
+    JAPANESE = "ja"
 
 
 class UserPreference(models.Model):

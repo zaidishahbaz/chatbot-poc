@@ -12,6 +12,9 @@ def send_whatsapp_message(to, message=None, file_path=None):
     :param to: Recipient WhatsApp number (e.g., 'whatsapp:+1234567890')
     :param message: Message text
     """
+    if not message and not file_path:
+        return
+
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
     ngrok_url = settings.NGROK_URL
 

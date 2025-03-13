@@ -1,3 +1,6 @@
+import io
+from urllib.request import urlopen
+
 from django.utils.decorators import method_decorator  # type: ignore
 from django.views.decorators.csrf import csrf_exempt  # type: ignore
 from rest_framework import status  # type: ignore
@@ -52,12 +55,38 @@ class WhatsAppWebhook(APIView):
         response_text = message  # Default response
 
         if message_type == "text":
-            message_response = util.ai_response(message=message)
+
+            if message in util.SERVICE_OPTION_MAP.keys():
+                message = util.translate(util.SERVICE_OPTION_MAP[message])
+
+            detected_language = util.translation_util._detect_language(message)
+            language_update_message = util.handle_update_user_preference(
+                detected_language
+            )
+            if language_update_message:
+                send_whatsapp_message(sender, util.translate(language_update_message))
+
+            message_response, type = util.ai_response(message=message)
             send_whatsapp_message(sender, message_response)
 
         elif message_type == "audio":
             media_url = parse_media_uri(request.data.get("MediaUrl0"))
-            message_response, type = util.ai_response(media_url=media_url)
+            with urlopen(media_url) as response:
+                audio = io.BytesIO(response.read())
+                audio.name = "input.mp3"
+                message = util.translation_util._transcribe(audio)
+                detected_language = util.translation_util._detect_language(message)
+                language_update_message = util.handle_update_user_preference(
+                    detected_language
+                )
+                if language_update_message:
+                    send_whatsapp_message(
+                        sender, util.translate(language_update_message)
+                    )
+
+            message_response, type = util.ai_response(
+                message=message, media_url=media_url
+            )
 
             if type == "audio":
                 send_whatsapp_message(sender, file_path=message_response)

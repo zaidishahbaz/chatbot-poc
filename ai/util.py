@@ -1,13 +1,16 @@
 import io
 import json
 import logging
+import math
 import os
 import urllib.parse
 import uuid
+from typing import Literal
 from urllib.request import urlopen
 
 import requests
 from django.conf import settings
+from geopy.geocoders import Nominatim
 from google.cloud.translate_v2 import Client
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageToolCall
@@ -31,8 +34,16 @@ class TranslationTranscriptionUtil:
             settings.GOOGLE_SERVICE_JSON
         )
 
+    def _detect_language(self, content: str):
+        detected_lang = self.translation_client.detect_language(content).get(
+            "language", "en"
+        )
+        if "-" in detected_lang:
+            detected_lang = detected_lang.split("-")[0]
+        return detected_lang
+
     def _transcribe(self, audio: io.BytesIO) -> str:
-        transcription = self.open_ai_client.audio.translations.create(
+        transcription = self.open_ai_client.audio.transcriptions.create(
             file=audio, **self.TRANSCRIPTION_SETTINGS
         )
         return transcription.text
@@ -79,8 +90,15 @@ class ConversationUtil:
     open_ai_client: OpenAI
     message_history = []
 
-    def __init_session(self, user: str):
-        self.messages = [{"role": SessionRole.DEVELOPER.value, "content": AI_PROMPT}]
+    SERVICE_OPTION_MAP = {
+        "1": "View todays route",
+        "2": "Find nearest fuel stations",
+        "3": "Find nearest repair stations",
+        "4": "Review Delivery Instructions",
+    }
+
+    def __init_session(self):
+        self.messages = [{"role": SessionRole.SYSTEM.value, "content": AI_PROMPT}]
         session_details = OpenAiConvSession.objects.filter(user=self.user).order_by(
             "created_date"
         )
@@ -93,7 +111,7 @@ class ConversationUtil:
         self.fuel_origin = None
         self.fuel_destination = None
         self.user = user
-        self.__init_session(user)
+        self.__init_session()
         self.translation_util = TranslationTranscriptionUtil()
 
     def _process_tool_call(self, tool_call: ChatCompletionMessageToolCall):
@@ -146,95 +164,138 @@ class ConversationUtil:
         Tool handler function to change language
         """
         selected_language = Languages(language)
-        UserPreference.objects.update_or_create(
-            user=self.user,
-            defaults={"language": selected_language.value},
-        )
+        try:
+            existing_preference = UserPreference.objects.get(user=self.user)
+            if existing_preference.language == selected_language.value:
+                return None
+            existing_preference.language = selected_language.value
+            existing_preference.save()
+        except UserPreference.DoesNotExist:
+            UserPreference.objects.create(
+                user=self.user, language=selected_language.value
+            )
+
         self._update_session_history(
             content="Updated user preference",
-            role=SessionRole.DEVELOPER,
+            role=SessionRole.SYSTEM,
         )
-        return f"✅ Your preferred language has been set to {selected_language.name}."
+        return f"Your preferred language is set to {selected_language.name.lower()}"
 
     def handle_get_route(self, origin: str, destination: str):
         """
         Tool handler function to get route
         """
-
-        self.fuel_origin = origin
-        self.fuel_destination = destination
-        # Generate Google Maps Route Link
-        maps_link = self.generate_google_maps_link(origin, destination)
-        ai_response = f"\n\n🔗 Click here to view the route on Google Maps: {maps_link}"
-
-        # Fetch gas stations along the route
-        gas_stations = self.get_gas_stations_on_route(origin, destination)
-        if gas_stations:
-            ai_response += "\n\n⛽ Suggested Gas Stations Along the Route:\n"
-            for station in gas_stations:
-                ai_response += f"- {station['name']} ([View on Google Maps]({station['maps_url']}))\n"
+        route_map = self.generate_google_maps_link(origin, destination)
+        recommended_fuel_stop = self.get_gas_stations_on_route("Berlin", "Vienna")[0]
+        ai_response = f"""Route sent!\n\nPickUp: {origin} (9:00 AM),
+            \n\nDelivery: {destination} (5:00 PM)
+            \n{route_map}
+            \n\nRecommended Fuel Stop: {math.ceil(recommended_fuel_stop['distance'])}KMs ({recommended_fuel_stop['name']})
+            \nRoute: {recommended_fuel_stop['link']}"""
 
         self._update_session_history(
-            content="Route has been calculated and send to user.",
-            role=SessionRole.DEVELOPER,
+            content=ai_response,
+            role=SessionRole.SYSTEM,
         )
         return ai_response
+
+    def handle_get_gas_stations(self, origin: str, destination: str):
+        ai_response = "Nearest fuel stations: "
+
+        gas_stations = self.get_gas_stations_on_route(origin, destination)
+        ai_response = ""
+        for station in gas_stations:
+            ai_response += (
+                f"Name: {station['name']} | {math.ceil(station['distance'])}Kms"
+            )
+            ai_response += f"\n{station['link']}"
+            ai_response += "\n\n"
+
+        self._update_session_history(
+            content="Gas stations identified and send to user",
+            role=SessionRole.SYSTEM,
+        )
+        return ai_response
+
+    def handle_get_repair_stations(self, origin: str, destination: str):
+        ai_response = "Nearest repair stations: "
+
+        repair_stations = self.get_repair_shops_on_route(origin, destination)
+        if repair_stations:
+            for station in repair_stations:
+                ai_response += (
+                    f"Name: {station['name']} | {math.ceil(station['distance'])}Kms"
+                )
+                ai_response += f"\n{station['link']}"
+                ai_response += "\n\n"
+
+        self._update_session_history(
+            content="Repair stations identified and send to user",
+            role=SessionRole.SYSTEM,
+        )
+        return ai_response
+
+    def translate(self, message, direction: Literal["IN"] | Literal["OUT"] = "OUT"):
+        """
+        Translate to language configure by the user
+        """
+        try:
+            language_preference_config = UserPreference.objects.get(user=self.user)
+            language = language_preference_config.language
+        except UserPreference.DoesNotExist:
+            language = "en"
+
+        if language != "en":
+            if direction == "IN":
+                source_lang = language
+                destination_lang = "en"
+            else:
+                source_lang = "en"
+                destination_lang = language
+
+            message = self.translation_util.text_to_text(
+                message,
+                source_lang=source_lang,
+                destination_lang=destination_lang,
+            )
+        return message
+
+    def append_service_option_message(self, message: str):
+        message += "\n\n"
+        message += "For quick help, select any of the option"
+        message += "\n"
+        for key, value in self.SERVICE_OPTION_MAP.items():
+            message += f"{key}. {self.translate(value)}"
+            message += "\n"
+        return message
 
     def ai_response(self, message: str = None, media_url: str = None):
         """Generates a trucking response and suggests refueling stations if applicable."""
 
-        # Transcribe audio message
-        if media_url:
-            with urlopen(media_url) as response:
-                audio = io.BytesIO(response.read())
-                audio.name = "input.mp3"
-
-            message = self.translation_util._transcribe(audio)
-
+        message = self.translate(message, "IN")
         # Handle language selection
-        if "change_lang" in message:
-            parts = message.split(" ")
-            message = self.handle_update_user_preference(parts[1])
+        self._update_session_history(
+            content=message,
+            role=SessionRole.USER,
+        )
+
+        # Generate ai response
+        response = self._get_gpt_response()
+        if response.choices[0].message.tool_calls:
+            tool_call = response.choices[0].message.tool_calls[0]
+            message = self._process_tool_call(tool_call)
+            # Skip voice generation for tool output
+            message = self.translate(message)
+            return self.append_service_option_message(message), "text"
         else:
-            self._update_session_history(
-                content=message,
-                role=SessionRole.USER,
-            )
+            message = response.choices[0].message.content
 
-            def translate(message):
-                """
-                Translate to language configure by the user
-                """
-                try:
-                    language_preference_config = UserPreference.objects.get(
-                        user=self.user
-                    )
-                    language = language_preference_config.language
-                except UserPreference.DoesNotExist:
-                    language = "en"
+        message = self.translate(message)
+        if media_url:
+            return self.translation_util._generate_audio(message), "audio"
 
-                if language != "en":
-                    message = self.translation_util.text_to_text(
-                        message, source_lang="en", destination_lang=language
-                    )
-                return message
-
-            # Generate ai response
-            response = self._get_gpt_response()
-            if response.choices[0].message.tool_calls:
-                tool_call = response.choices[0].message.tool_calls[0]
-                message = self._process_tool_call(tool_call)
-                # Skip voice generation for tool output
-                return translate(message), "text"
-            else:
-                message = response.choices[0].message.content
-
-            message = translate(message)
-
-            if media_url:
-                return self.translation_util._generate_audio(message), "audio"
-
-            return message, "text"
+        message = self.append_service_option_message(message)
+        return message, "text"
 
     def extract_locations(self, message: str):
         """Extracts origin and destination from the user's message using a basic pattern."""
@@ -256,30 +317,141 @@ class ConversationUtil:
 
     def get_gas_stations_on_route(self, origin: str, destination: str):
         """Fetches gas stations along the route using the Google Places API."""
-        places_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        places_url = "https://places.googleapis.com/v1/places:searchNearby"
 
         # Get midpoint between origin and destination (rough estimate)
         midpoint = (
-            destination  # Simplified, ideally get a midpoint via Google Directions API
+            origin  # Simplified, ideally get a midpoint via Google Directions API
         )
 
-        params = {
-            "location": midpoint,  # Searching near the destination (can be adjusted for midpoint)
-            "radius": 5000,  # 5 km radius
-            "type": "gas_station",
-            "key": self.google_maps_api_key,
+        geolocator = Nominatim(user_agent="geocoding_app")
+        location = geolocator.geocode(midpoint)
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.google_maps_api_key,
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.fuelOptions,routingSummaries.legs.distanceMeters",
         }
 
-        response = requests.get(places_url, params=params)
+        payload = {
+            "includedTypes": ["gas_station"],
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": location.latitude,
+                        "longitude": location.longitude,
+                    },
+                    "radius": 5000,
+                }
+            },
+            "routingParameters": {
+                "origin": {
+                    "latitude": location.latitude,
+                    "longitude": location.longitude,
+                },
+                "routingPreference": "TRAFFIC_AWARE",
+            },
+        }
+
+        response = requests.post(places_url, json=payload, headers=headers)
         if response.status_code == 200:
             data = response.json()
             gas_stations = []
 
-            for place in data.get("results", [])[:3]:  # Limit to 3 stations
-                name = place["name"]
-                place_id = place["place_id"]
-                maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
-                gas_stations.append({"name": name, "maps_url": maps_url})
+            places = data["places"][:3]
+            summaries = data["routingSummaries"][:3]
+            for i in range(len(places)):
+                place = places[i]
+                summary = summaries[i]
+
+                name = (
+                    place["displayName"]["text"]
+                    + " "
+                    + place["formattedAddress"].split(" ")[0]
+                )
+                fuel_station = {
+                    "name": name,
+                    "distance": summary["legs"][0]["distanceMeters"] / 1000,
+                    "link": self.generate_google_maps_link(midpoint, name),
+                }
+
+                fuel_options = place.get("fuelOptions")
+                if fuel_options:
+                    fuel_prices = ", ".join(
+                        [
+                            f"{item['type']}: {item['price']['nanos']/10000000}€"
+                            for item in fuel_options["fuelPrices"]
+                            if "DIESEL" in item["type"]
+                        ]
+                    )
+                    fuel_station["fuel_prices"] = fuel_prices
+
+                if "fuel_prices" in fuel_station:
+                    gas_stations.append(fuel_station)
 
             return gas_stations
+        return []
+
+    def get_repair_shops_on_route(self, origin: str, destination: str):
+        places_url = "https://places.googleapis.com/v1/places:searchNearby"
+
+        # Get midpoint between origin and destination (rough estimate)
+        midpoint = (
+            origin  # Simplified, ideally get a midpoint via Google Directions API
+        )
+
+        geolocator = Nominatim(user_agent="geocoding_app")
+        location = geolocator.geocode(midpoint)
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.google_maps_api_key,
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.fuelOptions,routingSummaries.legs.distanceMeters",
+        }
+
+        payload = {
+            "includedTypes": ["car_repair"],
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": location.latitude,
+                        "longitude": location.longitude,
+                    },
+                    "radius": 5000,
+                }
+            },
+            "routingParameters": {
+                "origin": {
+                    "latitude": location.latitude,
+                    "longitude": location.longitude,
+                },
+                "routingPreference": "TRAFFIC_AWARE",
+            },
+        }
+
+        response = requests.post(places_url, json=payload, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            repair_stations = []
+
+            places = data["places"][:3]
+            summaries = data["routingSummaries"][:3]
+            for i in range(len(places)):
+                place = places[i]
+                summary = summaries[i]
+
+                name = (
+                    place["displayName"]["text"]
+                    + " "
+                    + place["formattedAddress"].split(" ")[0]
+                )
+                fuel_station = {
+                    "name": name,
+                    "distance": summary["legs"][0]["distanceMeters"] / 1000,
+                    "link": self.generate_google_maps_link(midpoint, name),
+                }
+                repair_stations.append(fuel_station)
+
+            return repair_stations
+
         return []

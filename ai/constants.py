@@ -22,7 +22,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_route",
-            "description": "Get driving route",
+            "description": "Get driving route for a delivery",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -48,7 +48,33 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_gas_stations",
-            "description": "Get gas stations along the route",
+            "description": "Get fuel stations nearby",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Starting point of the journey",
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "Ending point/destination of the journey",
+                    },
+                },
+                "required": [
+                    "origin",
+                    "destination",
+                ],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_repair_stations",
+            "description": "Get repair shops along the route",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -73,20 +99,14 @@ TOOLS = [
 ]
 
 AI_PROMPT = """
-        You are a trucking company dispatcher.
-        Your objective is to help truck drivers with their queries.
-        Provide truck drivers with
-            - Ask drive if they like to change the language on greeting or Detect drivers language and update language
-            - User tool function to update language
-            - Driving routes and improve efficiency
-            - Help with the nearest accommodations details
-            - Help with the nearest restaurants
-            - Help with any other driver questions
-
-        You should respond in english language regardless of drivers configuration
-        Supported languages and language codes are:
-            English - en
-            Hindi - hi
-            French - fr
-            Spanish - es
+        - You are a trucking company dispatcher.
+        - Your objective is to help truck drivers with their queries.
+        - Get available fuel/gas stations from tools and send to user upon request
+        - Assist drivers with mechanical issues, get nearest repair stations
+        - Assist driver with fuel issues, like low fuel, get nearest fuel stations
+        - Ask driver to view todays route on starting a new shift
+        - Todays route is from Berlin-to-Vienna
+        - Do not add any special characters in the response.
+        - Always use tools to get route, fuel stations and repair station information.
+        - Generate a random meaningful delivery instruction for Berlin-to-Vienna shipment, Eg: documents to carry, toll related information, rule and regulations.
         """
