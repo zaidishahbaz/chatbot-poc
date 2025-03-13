@@ -97,8 +97,8 @@ class ConversationUtil:
         "4": "Review Delivery Instructions",
     }
 
-    def __init_session(self, user: str):
-        self.messages = [{"role": SessionRole.DEVELOPER.value, "content": AI_PROMPT}]
+    def __init_session(self):
+        self.messages = [{"role": SessionRole.SYSTEM.value, "content": AI_PROMPT}]
         session_details = OpenAiConvSession.objects.filter(user=self.user).order_by(
             "created_date"
         )
@@ -111,7 +111,7 @@ class ConversationUtil:
         self.fuel_origin = None
         self.fuel_destination = None
         self.user = user
-        self.__init_session(user)
+        self.__init_session()
         self.translation_util = TranslationTranscriptionUtil()
 
     def _process_tool_call(self, tool_call: ChatCompletionMessageToolCall):
@@ -177,7 +177,7 @@ class ConversationUtil:
 
         self._update_session_history(
             content="Updated user preference",
-            role=SessionRole.DEVELOPER,
+            role=SessionRole.SYSTEM,
         )
         return f"Your preferred language is set to {selected_language.name.lower()}"
 
@@ -187,14 +187,20 @@ class ConversationUtil:
         """
         route_map = self.generate_google_maps_link(origin, destination)
         recommended_fuel_stop = self.get_gas_stations_on_route("Berlin", "Vienna")[0]
-        return f"""Route sent!\n\nPickUp: {origin} (9:00 AM),
+        ai_response = f"""Route sent!\n\nPickUp: {origin} (9:00 AM),
             \n\nDelivery: {destination} (5:00 PM)
-            \n\n{route_map}
+            \n{route_map}
             \n\nRecommended Fuel Stop: {math.ceil(recommended_fuel_stop['distance'])}KMs ({recommended_fuel_stop['name']})
-            \n\nRoute: {recommended_fuel_stop['link']}"""
+            \nRoute: {recommended_fuel_stop['link']}"""
+
+        self._update_session_history(
+            content=ai_response,
+            role=SessionRole.SYSTEM,
+        )
+        return ai_response
 
     def handle_get_gas_stations(self, origin: str, destination: str):
-        ai_response = ""
+        ai_response = "Nearest fuel stations: "
 
         gas_stations = self.get_gas_stations_on_route(origin, destination)
         ai_response = ""
@@ -206,13 +212,13 @@ class ConversationUtil:
             ai_response += "\n\n"
 
         self._update_session_history(
-            content=f"Gas station found: {gas_stations}, Share the details with user",
-            role=SessionRole.DEVELOPER,
+            content="Gas stations identified and send to user",
+            role=SessionRole.SYSTEM,
         )
         return ai_response
 
     def handle_get_repair_stations(self, origin: str, destination: str):
-        ai_response = ""
+        ai_response = "Nearest repair stations: "
 
         repair_stations = self.get_repair_shops_on_route(origin, destination)
         if repair_stations:
@@ -224,8 +230,8 @@ class ConversationUtil:
                 ai_response += "\n\n"
 
         self._update_session_history(
-            content=f"Repair shops found: {repair_stations}, Share the details with user",
-            role=SessionRole.DEVELOPER,
+            content="Repair stations identified and send to user",
+            role=SessionRole.SYSTEM,
         )
         return ai_response
 
@@ -256,6 +262,8 @@ class ConversationUtil:
 
     def append_service_option_message(self, message: str):
         message += "\n\n"
+        message += "For quick help, select any of the option"
+        message += "\n"
         for key, value in self.SERVICE_OPTION_MAP.items():
             message += f"{key}. {self.translate(value)}"
             message += "\n"
@@ -283,7 +291,6 @@ class ConversationUtil:
             message = response.choices[0].message.content
 
         message = self.translate(message)
-
         if media_url:
             return self.translation_util._generate_audio(message), "audio"
 
@@ -374,10 +381,13 @@ class ConversationUtil:
                         [
                             f"{item['type']}: {item['price']['nanos']/10000000}€"
                             for item in fuel_options["fuelPrices"]
+                            if "DIESEL" in item["type"]
                         ]
                     )
                     fuel_station["fuel_prices"] = fuel_prices
-                gas_stations.append(fuel_station)
+
+                if "fuel_prices" in fuel_station:
+                    gas_stations.append(fuel_station)
 
             return gas_stations
         return []
