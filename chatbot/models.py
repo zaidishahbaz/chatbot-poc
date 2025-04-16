@@ -8,4 +8,7 @@ class ChatMessage(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.sender}: {self.message}"
+        truncated_message = (
+            self.message[:50] + "..." if len(self.message) > 50 else self.message
+        )
+        return f"{self.sender}: {truncated_message}"
